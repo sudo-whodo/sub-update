@@ -5,6 +5,37 @@
   serial: 1
   tasks:
     ####################################################################
+    # Pre-check: Verify systemd service exists on target server
+    # Can be skipped by setting skip_service_check=true
+    ####################################################################
+    - name: Check if systemd service exists on target
+      ansible.builtin.systemd:
+        name: "{{ service_name }}"
+      register: service_check
+      failed_when: false
+      changed_when: false
+      when: not (skip_service_check | default(false))
+
+    - name: Fail if service does not exist
+      ansible.builtin.fail:
+        msg: "ERROR: Systemd service '{{ service_name }}' does not exist on {{ inventory_hostname }}. Aborting deployment to prevent deploying to wrong server. (Set skip_service_check=true to bypass this check)"
+      when:
+        - not (skip_service_check | default(false))
+        - service_check.status is not defined
+
+    - name: Confirm service exists
+      ansible.builtin.debug:
+        msg: "✓ Service '{{ service_name }}' found on {{ inventory_hostname }} - proceeding with deployment"
+      when:
+        - not (skip_service_check | default(false))
+        - service_check.status is defined
+
+    - name: Service check skipped
+      ansible.builtin.debug:
+        msg: "⚠ Service pre-check skipped (skip_service_check=true) - proceeding without verification"
+      when: skip_service_check | default(false)
+
+    ####################################################################
     # 1) Pull application_version from GitHub if "latest" or undefined
     ####################################################################
     - name: Pull latest release (token-based)
@@ -53,6 +84,13 @@
             application_version: "{{ github_release.json.tag_name }}"
 
     ####################################################################
+    # 1.5) Display the application_version that will be used
+    ####################################################################
+    - name: Display application version to be downloaded
+      ansible.builtin.debug:
+        msg: "Downloading application version: {{ application_version }}"
+
+    ####################################################################
     # 2) Download / Unarchive / Copy Binaries
     #
     #    - If "application_version" is explicitly set (e.g. -e application_version=1.2.3),
@@ -88,7 +126,7 @@
       ansible.builtin.copy:
         src: "/tmp/{{ item.binary }}"
         remote_src: true
-        dest: "{{ item.dest_path }}{{ item.binary_rename | default(item.binary) }}"
+        dest: "{{ item.dest_path }}/{{ item.binary_rename | default(item.binary) }}"
         owner: "{{ file_owner }}"
         group: "{{ file_group }}"
         mode: "u=rwx,g=rwx,o=rx"
